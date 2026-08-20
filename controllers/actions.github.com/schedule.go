@@ -35,26 +35,34 @@ func MatchSchedule(now time.Time, startTime, endTime time.Time, recurrenceRule R
 	)
 }
 
+// freqMinDuration is, for each recurring frequency, the shortest possible interval
+// between two consecutive occurrences (e.g. the shortest calendar month is 28
+// days). An override's duration must fit within that interval or it would overlap
+// its own next occurrence. This is a fixed invariant rather than one derived from
+// the current reconciliation time: computing it from `now` (as the legacy
+// summerwind/actions-runner-controller ScheduledOverride implementation did) made
+// validity depend on when the check happened to run — e.g. a 30-day Monthly
+// override would pass when checked in a 31-day month and fail when checked in
+// February.
+var freqMinDuration = map[string]time.Duration{
+	"Daily":   24 * time.Hour,
+	"Weekly":  7 * 24 * time.Hour,
+	"Monthly": 28 * 24 * time.Hour,
+	"Yearly":  365 * 24 * time.Hour,
+}
+
 func calculateActiveAndUpcomingRecurringPeriods(now, startTime, endTime time.Time, frequency string, untilTime time.Time) (*Period, *Period, error) {
 	var freqValue rrule.Frequency
-
-	var freqDurationDay int
-	var freqDurationMonth int
-	var freqDurationYear int
 
 	switch frequency {
 	case "Daily":
 		freqValue = rrule.DAILY
-		freqDurationDay = 1
 	case "Weekly":
 		freqValue = rrule.WEEKLY
-		freqDurationDay = 7
 	case "Monthly":
 		freqValue = rrule.MONTHLY
-		freqDurationMonth = 1
 	case "Yearly":
 		freqValue = rrule.YEARLY
-		freqDurationYear = 1
 	case "":
 		if now.Before(startTime) {
 			return nil, &Period{StartTime: startTime, EndTime: endTime}, nil
@@ -69,18 +77,9 @@ func calculateActiveAndUpcomingRecurringPeriods(now, startTime, endTime time.Tim
 		return nil, nil, fmt.Errorf(`invalid freq %q: It must be one of "Daily", "Weekly", "Monthly", and "Yearly"`, frequency)
 	}
 
-	freqDurationLater := time.Date(
-		now.Year()+freqDurationYear,
-		time.Month(int(now.Month())+freqDurationMonth),
-		now.Day()+freqDurationDay,
-		now.Hour(), now.Minute(), now.Second(), now.Nanosecond(), now.Location(),
-	)
-
-	freqDuration := freqDurationLater.Sub(now)
-
 	overrideDuration := endTime.Sub(startTime)
-	if overrideDuration > freqDuration {
-		return nil, nil, fmt.Errorf("override's duration %s must be equal to or shorter than the duration implied by freq %q (%s)", overrideDuration, frequency, freqDuration)
+	if minDuration := freqMinDuration[frequency]; overrideDuration > minDuration {
+		return nil, nil, fmt.Errorf("override's duration %s must be equal to or shorter than the minimum interval implied by freq %q (%s)", overrideDuration, frequency, minDuration)
 	}
 
 	rrule, err := rrule.NewRRule(rrule.ROption{
@@ -106,15 +105,20 @@ func calculateActiveAndUpcomingRecurringPeriods(now, startTime, endTime time.Tim
 		}
 	}
 
-	oneSecondLater := now.Add(1)
-	upcomingOverrideStarts := rrule.Between(oneSecondLater, freqDurationLater, true)
-
+	// Find the very next occurrence after now, however far out it is, rather than
+	// bounding the search to one calendar period after now. A fixed one-period
+	// window can miss the next occurrence entirely for recurrences whose start day
+	// doesn't exist in every period (e.g. Monthly on the 31st, or Yearly on Feb
+	// 29): rrule skips periods without a matching day, so the next real occurrence
+	// can fall outside a naively-computed single-period window. After() is bounded
+	// by the rule's Until (or ~290 years when unset), which is a sufficient hard
+	// stop on its own.
 	var next *Period
 
-	if len(upcomingOverrideStarts) > 0 {
+	if nextStart := rrule.After(now, false); !nextStart.IsZero() {
 		next = &Period{
-			StartTime: upcomingOverrideStarts[0],
-			EndTime:   upcomingOverrideStarts[0].Add(overrideDuration),
+			StartTime: nextStart,
+			EndTime:   nextStart.Add(overrideDuration),
 		}
 	}
 

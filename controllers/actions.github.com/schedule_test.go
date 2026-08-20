@@ -606,6 +606,89 @@ func parseAndMatchRecurringPeriod(now time.Time, start, end, frequency, until st
 	return MatchSchedule(now, startTime, endTime, RecurrenceRule{Frequency: frequency, UntilTime: untilTime})
 }
 
+// TestDurationInvariantIsFixed checks that a Monthly override's maximum allowed
+// duration no longer depends on the calendar month it happens to be evaluated in.
+// A 30-day override exceeds the fixed 28-day Monthly invariant and must be
+// rejected consistently, regardless of whether `now` falls in a 31-day month or
+// in February.
+func TestDurationInvariantIsFixed(t *testing.T) {
+	start, err := time.Parse(time.RFC3339, "2021-01-01T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	end := start.Add(30 * 24 * time.Hour)
+
+	for _, now := range []string{
+		"2021-01-15T00:00:00Z", // evaluated during a 31-day month
+		"2021-02-15T00:00:00Z", // evaluated during a 28-day month
+	} {
+		t.Run(now, func(t *testing.T) {
+			nowTime, err := time.Parse(time.RFC3339, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			_, _, err = MatchSchedule(nowTime, start, end, RecurrenceRule{Frequency: "Monthly"})
+			if err == nil {
+				t.Fatal("expected an error: a 30-day override exceeds the fixed 28-day Monthly invariant")
+			}
+		})
+	}
+}
+
+// TestUpcomingOccurrenceSurvivesMonthWithoutTheStartDay checks that a Monthly
+// override starting on the 31st still finds its next occurrence when evaluated
+// from within February, which has no 31st. The naive "one period after now"
+// window used to miss it entirely.
+func TestUpcomingOccurrenceSurvivesMonthWithoutTheStartDay(t *testing.T) {
+	start, err := time.Parse(time.RFC3339, "2021-01-31T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	end := start.Add(time.Hour)
+	now, err := time.Parse(time.RFC3339, "2021-02-15T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, upcoming, err := MatchSchedule(now, start, end, RecurrenceRule{Frequency: "Monthly"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := "2021-03-31T00:00:00Z-2021-03-31T01:00:00Z"
+	if got := upcoming.String(); got != want {
+		t.Errorf("unexpected upcoming: want %q, got %q", want, got)
+	}
+}
+
+// TestUpcomingOccurrenceSurvivesLeapDay checks that a Yearly override starting on
+// Feb 29 still finds its next occurrence (the following leap year) when evaluated
+// shortly after March 1 of a non-leap year. The naive "one period after now"
+// window used to miss it entirely, since the three intervening non-leap years
+// have no Feb 29 at all.
+func TestUpcomingOccurrenceSurvivesLeapDay(t *testing.T) {
+	start, err := time.Parse(time.RFC3339, "2020-02-29T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	end := start.Add(time.Hour)
+	now, err := time.Parse(time.RFC3339, "2021-03-01T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, upcoming, err := MatchSchedule(now, start, end, RecurrenceRule{Frequency: "Yearly"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := "2024-02-29T00:00:00Z-2024-02-29T01:00:00Z"
+	if got := upcoming.String(); got != want {
+		t.Errorf("unexpected upcoming: want %q, got %q", want, got)
+	}
+}
+
 func FuzzMatchSchedule(f *testing.F) {
 	start := time.Now()
 	end := time.Now()
