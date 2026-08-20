@@ -86,28 +86,26 @@ require a second controller.
   start/end boundary when `scheduledOverrides` is non-empty. If no
   overrides are configured, there's no time-based requeue — same as
   today. Existing users see no behavior change.
-- Effective `minRunners` is clamped to `spec.maxRunners` (when set) at
-  evaluation time, so an override can't produce a listener spec with
-  `minRunners > maxRunners`. A CEL validation rule on the CRD also
-  rejects an override whose `minRunners` exceeds `maxRunners` at admission
-  time. Upstream issue #2509 reports this exact bug against the legacy
-  HRA feature; this ADR fixes it rather than inheriting it.
-- CEL validation requires `endTime > startTime` at admission; a
-  create/update that violates it is rejected outright, and the
-  previously stored spec (if any) stays active.
-- The legacy `schedule.go` also rejects an override whose duration
-  exceeds the interval implied by `frequency`, but it computes that
-  interval from the reconciliation time, so the same 30-day Monthly
-  override passes when evaluated in a 31-day month and fails in
-  February — validity depends on when it's checked, which is wrong. The
-  new implementation instead checks duration against a fixed invariant
-  per frequency (Daily=24h, Weekly=7d, Monthly=28d, Yearly=365d — the
-  minimum possible interval for each), so a given override is always
-  valid or always invalid regardless of when it's evaluated. This check
-  branches on `frequency` and isn't CEL-expressible, so it still runs at
-  evaluation time; a failure there degrades the runner set to
-  `spec.minRunners` with a logged error, rather than blocking
-  reconciliation.
+- All override validation runs at evaluation time, not admission. The
+  effective `minRunners` is clamped to `spec.maxRunners`. An entry whose
+  `endTime <= startTime`, or a recurring entry whose duration exceeds its
+  fixed per-frequency invariant (Daily=24h, Weekly=7d, Monthly=28d,
+  Yearly=365d — the minimum possible interval for each), is skipped with
+  a logged error; other, valid entries in `scheduledOverrides` still
+  apply, and if none apply, `spec.minRunners` holds. Reconciliation is
+  never blocked. Upstream issue #2509 reports the `minRunners >
+  maxRunners` case against the legacy HRA feature; this ADR fixes it
+  rather than inheriting it.
+- The legacy `schedule.go` computes the per-frequency interval from the
+  reconciliation time, so the same 30-day Monthly override passes when
+  evaluated in a 31-day month and fails in February — validity depends on
+  when it's checked, which is wrong. The fixed invariants above replace
+  that, so a given override is always valid or always invalid regardless
+  of when it's evaluated.
+- CRD CEL validation rules could reject malformed overrides at admission
+  instead. `apis/` has no `+kubebuilder:validation:XValidation` usage
+  today, and this ADR doesn't introduce the first one; adding CEL rules
+  here is left as a follow-up for maintainers to opt into.
 - `scheduledOverrides` is exposed as a passthrough value in the
   `gha-runner-scale-set` Helm chart: `values.yaml`, template rendering,
   and a chart test.
@@ -130,6 +128,11 @@ schema, and can be added later as an additive, optional field if needed.
 
 Each time an override boundary crosses, the listener pod restarts. This
 is one pod restart, not a runner restart, and it's cheap.
+
+The port also fixes a legacy edge case: the occurrence search was
+bounded to one calendar period ahead, so a Monthly rule anchored on day
+31 or a Yearly rule anchored on Feb 29 could miss its next occurrence in
+a shorter month or a non-leap year.
 
 The field is optional and additive: existing `AutoscalingRunnerSet`
 resources without `scheduledOverrides` behave exactly as they do today,
