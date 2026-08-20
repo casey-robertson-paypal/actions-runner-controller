@@ -92,15 +92,22 @@ require a second controller.
   rejects an override whose `minRunners` exceeds `maxRunners` at admission
   time. Upstream issue #2509 reports this exact bug against the legacy
   HRA feature; this ADR fixes it rather than inheriting it.
-- CEL validation requires `endTime > startTime`. For recurring overrides,
-  `controllers/actions.summerwind.net/schedule.go` already rejects a
-  schedule whose override duration (`endTime - startTime`) is longer than
-  the interval implied by `frequency` (e.g. a 2-day override on a
-  `Daily` recurrence), returning an error at evaluation time; the new
-  implementation keeps that same check and the same error. Any schedule
-  that fails temporal validation — CEL-rejected or evaluation-time error
-  — degrades the runner set to `spec.minRunners` with a logged error. It
-  never blocks reconciliation or disables the runner set.
+- CEL validation requires `endTime > startTime` at admission; a
+  create/update that violates it is rejected outright, and the
+  previously stored spec (if any) stays active.
+- The legacy `schedule.go` also rejects an override whose duration
+  exceeds the interval implied by `frequency`, but it computes that
+  interval from the reconciliation time, so the same 30-day Monthly
+  override passes when evaluated in a 31-day month and fails in
+  February — validity depends on when it's checked, which is wrong. The
+  new implementation instead checks duration against a fixed invariant
+  per frequency (Daily=24h, Weekly=7d, Monthly=28d, Yearly=365d — the
+  minimum possible interval for each), so a given override is always
+  valid or always invalid regardless of when it's evaluated. This check
+  branches on `frequency` and isn't CEL-expressible, so it still runs at
+  evaluation time; a failure there degrades the runner set to
+  `spec.minRunners` with a logged error, rather than blocking
+  reconciliation.
 - `scheduledOverrides` is exposed as a passthrough value in the
   `gha-runner-scale-set` Helm chart: `values.yaml`, template rendering,
   and a chart test.
