@@ -381,13 +381,7 @@ func (r *AutoscalingRunnerSetReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{}, err
 	}
 
-	requeueAfter, err := scheduledOverrideRequeueAfter(&autoscalingRunnerSet.Spec, time.Now())
-	if err != nil {
-		log.Error(err, "Failed to compute next scheduled override transition")
-		return ctrl.Result{}, err
-	}
-
-	return ctrl.Result{RequeueAfter: requeueAfter}, nil
+	return ctrl.Result{RequeueAfter: scheduledOverrideRequeueAfter(&autoscalingRunnerSet.Spec, time.Now())}, nil
 }
 
 func (r *AutoscalingRunnerSetReconciler) cleanUpResources(ctx context.Context, autoscalingRunnerSet *v1alpha1.AutoscalingRunnerSet, log logr.Logger) (bool, error) {

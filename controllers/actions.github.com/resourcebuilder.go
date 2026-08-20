@@ -126,10 +126,7 @@ func (b *ResourceBuilder) newAutoscalingListener(autoscalingRunnerSet *v1alpha1.
 	if autoscalingRunnerSet.Spec.MaxRunners != nil {
 		effectiveMaxRunners = *autoscalingRunnerSet.Spec.MaxRunners
 	}
-	effectiveMinRunners, _, _, err := resolveMinRunners(&autoscalingRunnerSet.Spec, time.Now())
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve effective min runners: %w", err)
-	}
+	effectiveMinRunners, _, _ := resolveMinRunners(&autoscalingRunnerSet.Spec, time.Now())
 
 	spec := v1alpha1.AutoscalingListenerSpec{
 		GitHubConfigURL:               autoscalingRunnerSet.Spec.GitHubConfigUrl,

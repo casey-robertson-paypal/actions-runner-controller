@@ -17,8 +17,7 @@ func TestResolveMinRunners(t *testing.T) {
 	t.Run("no overrides", func(t *testing.T) {
 		spec := &v1alpha1.AutoscalingRunnerSetSpec{MinRunners: &minRunners}
 
-		got, _, hasNext, err := resolveMinRunners(spec, now)
-		require.NoError(t, err)
+		got, _, hasNext := resolveMinRunners(spec, now)
 		assert.Equal(t, 1, got)
 		assert.False(t, hasNext)
 	})
@@ -36,8 +35,7 @@ func TestResolveMinRunners(t *testing.T) {
 			},
 		}
 
-		got, next, hasNext, err := resolveMinRunners(spec, now)
-		require.NoError(t, err)
+		got, next, hasNext := resolveMinRunners(spec, now)
 		assert.Equal(t, 5, got)
 		require.True(t, hasNext)
 		assert.WithinDuration(t, now.Add(time.Hour), next, time.Second)
@@ -56,14 +54,13 @@ func TestResolveMinRunners(t *testing.T) {
 			},
 		}
 
-		got, next, hasNext, err := resolveMinRunners(spec, now)
-		require.NoError(t, err)
+		got, next, hasNext := resolveMinRunners(spec, now)
 		assert.Equal(t, 1, got)
 		require.True(t, hasNext)
 		assert.WithinDuration(t, now.Add(time.Hour), next, time.Second)
 	})
 
-	t.Run("invalid frequency returns an error", func(t *testing.T) {
+	t.Run("invalid entry is skipped, falling back to spec.minRunners", func(t *testing.T) {
 		spec := &v1alpha1.AutoscalingRunnerSetSpec{
 			MinRunners: &minRunners,
 			ScheduledOverrides: []v1alpha1.ScheduledOverride{
@@ -77,8 +74,56 @@ func TestResolveMinRunners(t *testing.T) {
 			},
 		}
 
-		_, _, _, err := resolveMinRunners(spec, now)
-		assert.Error(t, err)
+		got, _, hasNext := resolveMinRunners(spec, now)
+		assert.Equal(t, 1, got, "invalid entry should not affect the result")
+		assert.False(t, hasNext, "an invalid, skipped entry contributes no transition")
+	})
+
+	t.Run("invalid entry alongside a valid one still applies the valid one", func(t *testing.T) {
+		validMinRunners := 5
+		spec := &v1alpha1.AutoscalingRunnerSetSpec{
+			MinRunners: &minRunners,
+			ScheduledOverrides: []v1alpha1.ScheduledOverride{
+				{
+					// Invalid: a 30-day override can't fit in a Monthly recurrence
+					// (fixed 28-day invariant).
+					StartTime: metav1.NewTime(now.Add(-time.Hour)),
+					EndTime:   metav1.NewTime(now.Add(-time.Hour).Add(30 * 24 * time.Hour)),
+					RecurrenceRule: v1alpha1.RecurrenceRule{
+						Frequency: "Monthly",
+					},
+				},
+				{
+					StartTime:  metav1.NewTime(now.Add(-time.Hour)),
+					EndTime:    metav1.NewTime(now.Add(time.Hour)),
+					MinRunners: &validMinRunners,
+				},
+			},
+		}
+
+		got, next, hasNext := resolveMinRunners(spec, now)
+		assert.Equal(t, 5, got, "the valid entry should still apply despite the invalid one")
+		require.True(t, hasNext)
+		assert.WithinDuration(t, now.Add(time.Hour), next, time.Second)
+	})
+
+	t.Run("effective minRunners is clamped to maxRunners", func(t *testing.T) {
+		overrideMinRunners := 10
+		maxRunners := 2
+		spec := &v1alpha1.AutoscalingRunnerSetSpec{
+			MinRunners: &minRunners,
+			MaxRunners: &maxRunners,
+			ScheduledOverrides: []v1alpha1.ScheduledOverride{
+				{
+					StartTime:  metav1.NewTime(now.Add(-time.Hour)),
+					EndTime:    metav1.NewTime(now.Add(time.Hour)),
+					MinRunners: &overrideMinRunners,
+				},
+			},
+		}
+
+		got, _, _ := resolveMinRunners(spec, now)
+		assert.Equal(t, 2, got, "minRunners must never exceed maxRunners")
 	})
 }
 
@@ -89,8 +134,7 @@ func TestScheduledOverrideRequeueAfter(t *testing.T) {
 	t.Run("no overrides means no requeue", func(t *testing.T) {
 		spec := &v1alpha1.AutoscalingRunnerSetSpec{MinRunners: &minRunners}
 
-		d, err := scheduledOverrideRequeueAfter(spec, now)
-		require.NoError(t, err)
+		d := scheduledOverrideRequeueAfter(spec, now)
 		assert.Zero(t, d)
 	})
 
@@ -107,8 +151,7 @@ func TestScheduledOverrideRequeueAfter(t *testing.T) {
 			},
 		}
 
-		d, err := scheduledOverrideRequeueAfter(spec, now)
-		require.NoError(t, err)
+		d := scheduledOverrideRequeueAfter(spec, now)
 		assert.InDelta(t, time.Hour.Seconds(), d.Seconds(), 2)
 	})
 
@@ -125,8 +168,7 @@ func TestScheduledOverrideRequeueAfter(t *testing.T) {
 			},
 		}
 
-		d, err := scheduledOverrideRequeueAfter(spec, now)
-		require.NoError(t, err)
+		d := scheduledOverrideRequeueAfter(spec, now)
 		assert.Equal(t, maxScheduledOverrideRequeueAfter, d)
 	})
 }
