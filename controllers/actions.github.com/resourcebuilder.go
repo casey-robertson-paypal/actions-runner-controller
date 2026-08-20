@@ -10,6 +10,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/actions/actions-runner-controller/apis/actions.github.com/v1alpha1"
 	"github.com/actions/actions-runner-controller/apis/actions.github.com/v1alpha1/appconfig"
@@ -121,13 +122,13 @@ func (b *ResourceBuilder) newAutoscalingListener(autoscalingRunnerSet *v1alpha1.
 		return nil, err
 	}
 
-	effectiveMinRunners := 0
 	effectiveMaxRunners := math.MaxInt32
 	if autoscalingRunnerSet.Spec.MaxRunners != nil {
 		effectiveMaxRunners = *autoscalingRunnerSet.Spec.MaxRunners
 	}
-	if autoscalingRunnerSet.Spec.MinRunners != nil {
-		effectiveMinRunners = *autoscalingRunnerSet.Spec.MinRunners
+	effectiveMinRunners, _, _, err := resolveMinRunners(&autoscalingRunnerSet.Spec, time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve effective min runners: %w", err)
 	}
 
 	spec := v1alpha1.AutoscalingListenerSpec{

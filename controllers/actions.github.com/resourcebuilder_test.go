@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/actions/actions-runner-controller/apis/actions.github.com/v1alpha1"
 	"github.com/actions/scaleset"
@@ -540,5 +541,96 @@ func TestListenerPodNodeSelector(t *testing.T) {
 		assert.NotNil(t, pod.Spec.NodeSelector)
 		assert.Empty(t, pod.Spec.NodeSelector,
 			"explicitly empty nodeSelector should override the linux default")
+	})
+}
+
+func TestNewAutoscalingListener_ScheduledOverrides(t *testing.T) {
+	newARS := func(minRunners int, overrides []v1alpha1.ScheduledOverride) v1alpha1.AutoscalingRunnerSet {
+		return v1alpha1.AutoscalingRunnerSet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-scale-set",
+				Namespace: "test-ns",
+				Annotations: map[string]string{
+					runnerScaleSetIDAnnotationKey: "1",
+				},
+			},
+			Spec: v1alpha1.AutoscalingRunnerSetSpec{
+				GitHubConfigUrl:    "https://github.com/org/repo",
+				MinRunners:         &minRunners,
+				ScheduledOverrides: overrides,
+			},
+		}
+	}
+
+	b := ResourceBuilder{}
+
+	t.Run("no overrides uses spec.minRunners", func(t *testing.T) {
+		autoscalingRunnerSet := newARS(1, nil)
+		ephemeralRunnerSet, err := b.newEphemeralRunnerSet(&autoscalingRunnerSet)
+		require.NoError(t, err)
+
+		listener, err := b.newAutoscalingListener(&autoscalingRunnerSet, ephemeralRunnerSet, autoscalingRunnerSet.Namespace, "test:latest", nil)
+		require.NoError(t, err)
+		assert.Equal(t, 1, listener.Spec.MinRunners)
+	})
+
+	t.Run("active override replaces spec.minRunners", func(t *testing.T) {
+		now := time.Now()
+		overrideMinRunners := 5
+		autoscalingRunnerSet := newARS(1, []v1alpha1.ScheduledOverride{
+			{
+				StartTime:  metav1.NewTime(now.Add(-time.Hour)),
+				EndTime:    metav1.NewTime(now.Add(time.Hour)),
+				MinRunners: &overrideMinRunners,
+			},
+		})
+		ephemeralRunnerSet, err := b.newEphemeralRunnerSet(&autoscalingRunnerSet)
+		require.NoError(t, err)
+
+		listener, err := b.newAutoscalingListener(&autoscalingRunnerSet, ephemeralRunnerSet, autoscalingRunnerSet.Namespace, "test:latest", nil)
+		require.NoError(t, err)
+		assert.Equal(t, 5, listener.Spec.MinRunners)
+	})
+
+	t.Run("upcoming (not yet active) override does not replace spec.minRunners", func(t *testing.T) {
+		now := time.Now()
+		overrideMinRunners := 5
+		autoscalingRunnerSet := newARS(1, []v1alpha1.ScheduledOverride{
+			{
+				StartTime:  metav1.NewTime(now.Add(time.Hour)),
+				EndTime:    metav1.NewTime(now.Add(2 * time.Hour)),
+				MinRunners: &overrideMinRunners,
+			},
+		})
+		ephemeralRunnerSet, err := b.newEphemeralRunnerSet(&autoscalingRunnerSet)
+		require.NoError(t, err)
+
+		listener, err := b.newAutoscalingListener(&autoscalingRunnerSet, ephemeralRunnerSet, autoscalingRunnerSet.Namespace, "test:latest", nil)
+		require.NoError(t, err)
+		assert.Equal(t, 1, listener.Spec.MinRunners)
+	})
+
+	t.Run("earlier listed override wins when two are active", func(t *testing.T) {
+		now := time.Now()
+		firstMinRunners := 5
+		secondMinRunners := 9
+		autoscalingRunnerSet := newARS(1, []v1alpha1.ScheduledOverride{
+			{
+				StartTime:  metav1.NewTime(now.Add(-time.Hour)),
+				EndTime:    metav1.NewTime(now.Add(time.Hour)),
+				MinRunners: &firstMinRunners,
+			},
+			{
+				StartTime:  metav1.NewTime(now.Add(-2 * time.Hour)),
+				EndTime:    metav1.NewTime(now.Add(2 * time.Hour)),
+				MinRunners: &secondMinRunners,
+			},
+		})
+		ephemeralRunnerSet, err := b.newEphemeralRunnerSet(&autoscalingRunnerSet)
+		require.NoError(t, err)
+
+		listener, err := b.newAutoscalingListener(&autoscalingRunnerSet, ephemeralRunnerSet, autoscalingRunnerSet.Namespace, "test:latest", nil)
+		require.NoError(t, err)
+		assert.Equal(t, 5, listener.Spec.MinRunners)
 	})
 }
