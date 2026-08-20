@@ -86,6 +86,24 @@ require a second controller.
   start/end boundary when `scheduledOverrides` is non-empty. If no
   overrides are configured, there's no time-based requeue — same as
   today. Existing users see no behavior change.
+- Effective `minRunners` is clamped to `spec.maxRunners` (when set) at
+  evaluation time, so an override can't produce a listener spec with
+  `minRunners > maxRunners`. A CEL validation rule on the CRD also
+  rejects an override whose `minRunners` exceeds `maxRunners` at admission
+  time. Upstream issue #2509 reports this exact bug against the legacy
+  HRA feature; this ADR fixes it rather than inheriting it.
+- CEL validation requires `endTime > startTime`. For recurring overrides,
+  `controllers/actions.summerwind.net/schedule.go` already rejects a
+  schedule whose override duration (`endTime - startTime`) is longer than
+  the interval implied by `frequency` (e.g. a 2-day override on a
+  `Daily` recurrence), returning an error at evaluation time; the new
+  implementation keeps that same check and the same error. Any schedule
+  that fails temporal validation — CEL-rejected or evaluation-time error
+  — degrades the runner set to `spec.minRunners` with a logged error. It
+  never blocks reconciliation or disables the runner set.
+- `scheduledOverrides` is exposed as a passthrough value in the
+  `gha-runner-scale-set` Helm chart: `values.yaml`, template rendering,
+  and a chart test.
 
 ## Consequences
 
@@ -95,6 +113,13 @@ offset embedded in `startTime`/`endTime`; note that Kubernetes serializes
 `metav1.Time` to UTC, so the on-cluster object always shows UTC times
 even if the offset was preserved during evaluation (this is the same
 gotcha reported against the HRA version in #1916, not a new one).
+
+A fixed RFC3339 offset is not an IANA timezone: it carries no DST rules,
+so a `Daily`/`Weekly` recurrence will drift by an hour against local wall
+time across a DST transition. This is identical to the legacy HRA
+feature's behavior, not a regression, and we're not adding an IANA
+`timeZone` field now — it's scope creep against parity with the legacy
+schema, and can be added later as an additive, optional field if needed.
 
 Each time an override boundary crosses, the listener pod restarts. This
 is one pod restart, not a runner restart, and it's cheap.
