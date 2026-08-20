@@ -101,7 +101,12 @@ require a second controller.
   evaluated in a 31-day month and fails in February — validity depends on
   when it's checked, which is wrong. The fixed invariants above replace
   that, so a given override is always valid or always invalid regardless
-  of when it's evaluated.
+  of when it's evaluated. The bound is deliberately conservative: a
+  Monthly override anchored on the 31st with a 30-day duration is
+  rejected even though its real occurrences are always at least 31 days
+  apart. Exact per-rule occurrence-gap validation is possible but isn't
+  worth the complexity for that edge; the entry is skipped and logged
+  like any other invalid one.
 - CRD CEL validation rules could reject malformed overrides at admission
   instead. `apis/` has no `+kubebuilder:validation:XValidation` usage
   today, and this ADR doesn't introduce the first one; adding CEL rules
@@ -118,6 +123,11 @@ offset embedded in `startTime`/`endTime`; note that Kubernetes serializes
 `metav1.Time` to UTC, so the on-cluster object always shows UTC times
 even if the offset was preserved during evaluation (this is the same
 gotcha reported against the HRA version in #1916, not a new one).
+
+Skipped invalid overrides are visible only in the controller logs. The
+controllers in this API group have no EventRecorder plumbing today, so
+surfacing them as Kubernetes warning events would be new wiring; that's
+left as a follow-up if maintainers want resource-visible signals.
 
 A fixed RFC3339 offset is not an IANA timezone: it carries no DST rules,
 so a `Daily`/`Weekly` recurrence will drift by an hour against local wall
