@@ -802,6 +802,46 @@ func TestTemplateRenderedAutoScalingRunnerSet_MinMaxRunners_FromValuesFile(t *te
 	assert.Equal(t, 10, *ars.Spec.MaxRunners, "MaxRunners should be 10")
 }
 
+func TestTemplateRenderedAutoScalingRunnerSet_ScheduledOverrides(t *testing.T) {
+	t.Parallel()
+
+	// Path to the helm chart we will test
+	helmChartPath, err := filepath.Abs("../../gha-runner-scale-set")
+	require.NoError(t, err)
+
+	testValuesPath, err := filepath.Abs("../tests/values_scheduled_overrides.yaml")
+	require.NoError(t, err)
+
+	releaseName := "test-runners"
+	namespaceName := "test-" + strings.ToLower(random.UniqueID())
+
+	options := &helm.Options{
+		Logger: logger.Discard,
+		SetValues: map[string]string{
+			"controllerServiceAccount.name":      "arc",
+			"controllerServiceAccount.namespace": "arc-system",
+		},
+		ValuesFiles:    []string{testValuesPath},
+		KubectlOptions: k8s.NewKubectlOptions("", "", namespaceName),
+	}
+
+	output := helm.RenderTemplateContext(t, t.Context(), options, helmChartPath, releaseName, []string{"templates/autoscalingrunnerset.yaml"})
+
+	var ars v1alpha1.AutoscalingRunnerSet
+	helm.UnmarshalK8SYaml(t, output, &ars)
+
+	require.Len(t, ars.Spec.ScheduledOverrides, 2, "ScheduledOverrides should have 2 entries")
+
+	first := ars.Spec.ScheduledOverrides[0]
+	assert.Equal(t, 0, *first.MinRunners, "first override MinRunners should be 0")
+	assert.Equal(t, "Daily", first.RecurrenceRule.Frequency)
+	assert.False(t, first.RecurrenceRule.UntilTime.IsZero(), "first override UntilTime should be set")
+
+	second := ars.Spec.ScheduledOverrides[1]
+	assert.Equal(t, 10, *second.MinRunners, "second override MinRunners should be 10")
+	assert.Empty(t, second.RecurrenceRule.Frequency, "second override should be a one-time override")
+}
+
 func TestTemplateRenderedAutoScalingRunnerSet_ExtraVolumes(t *testing.T) {
 	t.Parallel()
 

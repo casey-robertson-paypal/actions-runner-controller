@@ -1,0 +1,14 @@
+githubConfigUrl: https://github.com/actions/actions-runner-controller
+githubConfigSecret:
+  github_token: test
+minRunners: 1
+scheduledOverrides:
+- startTime: "2024-01-01T00:00:00+09:00"
+  endTime: "2024-01-01T08:00:00+09:00"
+  minRunners: 0
+  recurrenceRule:
+    frequency: Daily
+    untilTime: "2025-01-01T00:00:00+09:00"
+- startTime: "2024-06-01T00:00:00+09:00"
+  endTime: "2024-06-02T00:00:00+09:00"
+  minRunners: 10
